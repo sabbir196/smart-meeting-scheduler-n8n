@@ -1,11 +1,11 @@
  # Smart Meeting Scheduler & Conflict Resolver
 
-An n8n workflow that automatically schedules meetings, detects calendar conflicts, and uses AI to suggest alternative time slots — built as part of an **n8n and AI Automation Engineer** course group project.
+An n8n workflow that automatically schedules meetings, detects calendar conflicts, and uses AI to suggest alternative time slots — built as part of an **n8n and AI Automation Engineer** course project.
 
 ## Overview
 
 This workflow takes a meeting request, checks it against Google Calendar, and:
-- **No conflict** → automatically creates the calendar event and sends a confirmation email
+- **No conflict** → automatically creates the calendar event and sends a styled confirmation email
 - **Conflict detected** → uses AI (Google Gemini) to suggest 3 alternative time slots and emails them to the requester
 
 ## How It Works
@@ -25,9 +25,12 @@ Get Existing Calendar Events (Google Calendar)
    ↓            ↓
 AI Suggest    Create Calendar Event
 Alternative        ↓
-Slots         Email: Send Confirmation
+Slots (Gemini) Build Confirmation Email HTML (Code node)
+   ↓                ↓
+Parse AI          Email: Send Confirmation
+Suggestions
    ↓
-Parse AI Suggestions
+Build Alternatives Email HTML (Code node)
    ↓
 Email: Send Alternatives
 ```
@@ -38,7 +41,7 @@ Email: Send Alternatives
 - ✅ Real-time Google Calendar conflict detection
 - ✅ AI-powered alternative time slot suggestions (Google Gemini)
 - ✅ Automatic calendar event creation when no conflict exists
-- ✅ Automated email notifications (confirmation or alternatives)
+- ✅ Styled HTML email notifications (confirmation or conflict + alternatives), built via dedicated Code nodes for reliable rendering
 
 ## Tech Stack
 
@@ -66,6 +69,11 @@ Email: Send Alternatives
 }
 ```
 
+## Notes
+
+- Gemini's response is parsed from `content.parts[0].text` — this structure differs from OpenAI's `message.content` format, so the parsing node is written specifically for Gemini's API response shape.
+- Email HTML for both the confirmation and alternative-slots messages is generated in dedicated Code nodes (rather than inline expressions) to avoid template-literal parsing issues inside n8n's expression editor.
+
 ## Project Context
 
-Built as a group project for the **n8n and AI Automation Engineer** course, demonstrating calendar API integration, conditional workflow logic, AI-assisted decision making, and automated email notifications.
+Built as part of the **n8n and AI Automation Engineer** course, demonstrating calendar API integration, conditional workflow logic, AI-assisted decision making, and automated email notifications.
