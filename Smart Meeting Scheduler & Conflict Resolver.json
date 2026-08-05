@@ -1,0 +1,382 @@
+{
+  "name": "Smart Meeting Scheduler & Conflict Resolver",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "meeting-request",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c5e72376-1486-48bb-906b-fd3a72d688e4",
+      "name": "Meeting Request (Webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        48
+      ],
+      "webhookId": "meeting-request"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize incoming meeting request data\nconst body = $input.first().json.body || $input.first().json;\n\nconst title = body.title || 'Untitled Meeting';\nconst attendees = body.attendees || [];\nconst durationMinutes = parseInt(body.durationMinutes || 30, 10);\nconst requestedStart = body.requestedStart; // ISO string e.g. 2026-08-10T10:00:00+06:00\nconst requestedEnd = new Date(new Date(requestedStart).getTime() + durationMinutes * 60000).toISOString();\n\nreturn [{\n  json: {\n    title,\n    attendees,\n    durationMinutes,\n    requestedStart,\n    requestedEnd,\n    requesterEmail: body.requesterEmail || ''\n  }\n}];"
+      },
+      "id": "6256dfa8-5ec1-41bf-a0a7-35d958102b47",
+      "name": "Normalize Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -896,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "faraj00558899@gmail.com",
+          "mode": "list",
+          "cachedResultName": "faraj00558899@gmail.com"
+        },
+        "timeMin": "={{ $json.requestedStart.split('T')[0] }}T00:00:00",
+        "timeMax": "={{ $json.requestedStart.split('T')[0] }}T23:59:59",
+        "options": {
+          "orderBy": "startTime"
+        }
+      },
+      "id": "3ca09d4b-7fff-48f6-8037-c66b4cc14b9b",
+      "name": "Get Existing Calendar Events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -672,
+        48
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "0SJhGCpTOq0ArigC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge normalized request with fetched events, then detect overlap\nconst request = $('Normalize Request').first().json;\nconst events = $input.all().map(item => item.json);\n\nconst reqStart = new Date(request.requestedStart).getTime();\nconst reqEnd = new Date(request.requestedEnd).getTime();\n\nconst conflicts = events.filter(ev => {\n  const evStart = new Date(ev.start?.dateTime || ev.start?.date).getTime();\n  const evEnd = new Date(ev.end?.dateTime || ev.end?.date).getTime();\n  return reqStart < evEnd && reqEnd > evStart;\n});\n\n// Build a simple list of busy slots for the day, to help suggest free time later\nconst busySlots = events.map(ev => ({\n  start: ev.start?.dateTime || ev.start?.date,\n  end: ev.end?.dateTime || ev.end?.date,\n  summary: ev.summary || ''\n}));\n\nreturn [{\n  json: {\n    ...request,\n    hasConflict: conflicts.length > 0,\n    conflictCount: conflicts.length,\n    conflictingEvents: conflicts.map(ev => ({\n      summary: ev.summary,\n      start: ev.start?.dateTime || ev.start?.date,\n      end: ev.end?.dateTime || ev.end?.date\n    })),\n    busySlots\n  }\n}];"
+      },
+      "id": "aa9dc712-f73e-43fb-86c7-b917bb2aca1e",
+      "name": "Detect Conflict",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-1",
+              "leftValue": "={{ $json.hasConflict }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "aa13d0bc-cbd2-4f46-9189-211a0a30f2a6",
+      "name": "Has Conflict?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the AI's JSON response safely\nconst raw = $input.first().json.message?.content || $input.first().json.text || '{}';\nlet parsed;\ntry {\n  const cleaned = raw.replace(/```json|```/g, '').trim();\n  parsed = JSON.parse(cleaned);\n} catch (e) {\n  parsed = { suggestions: [] };\n}\n\nconst request = $('Detect Conflict').first().json;\n\nreturn [{\n  json: {\n    ...request,\n    suggestions: parsed.suggestions || []\n  }\n}];"
+      },
+      "id": "fc306e3d-963b-43e0-ab5f-398425c83c8d",
+      "name": "Parse AI Suggestions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "scheduler@yourcompany.com",
+        "toEmail": "=  {{ $('Normalize Request').item.json.requesterEmail }}",
+        "subject": "=  Meeting confirmed: {{ $('Normalize Request').item.json.title }}",
+        "html": "=  <p>Hi,</p><p>Your meeting <strong>{{ $('Normalize Request').item.json.title }}</strong> is confirmed for {{ $('Normalize Request').item.json.requestedStart }} - {{ $('Normalize Request').item.json.requestedEnd }}.</p><p>No conflicts were found.</p>",
+        "options": {}
+      },
+      "id": "3e2916d2-af3d-4e2f-9f1e-7a7af807ec51",
+      "name": "Email: Send Alternatives",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        576,
+        -48
+      ],
+      "webhookId": "ad409826-86c1-4e1d-982d-521860166407",
+      "credentials": {
+        "smtp": {
+          "id": "di1LN66wl2cXEQ2g",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "mode": "list",
+          "value": "primary"
+        },
+        "start": "={{ $json.requestedStart }}",
+        "end": "={{ $json.requestedEnd }}",
+        "additionalFields": {
+          "attendees": "={{ $json.attendees }}",
+          "summary": "={{ $json.title }}"
+        }
+      },
+      "id": "f5dc29ba-4f71-4431-8404-fdb82d731533",
+      "name": "Create Calendar Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        352,
+        144
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "0SJhGCpTOq0ArigC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "scheduler@yourcompany.com",
+        "toEmail": "= {{ $('Normalize Request').item.json.requesterEmail }}",
+        "subject": "= Meeting confirmed: {{ $('Normalize Request').item.json.title }}",
+        "html": "= <p>Hi,</p><p>Your meeting <strong>{{ $('Normalize Request').item.json.title }}</strong> is confirmed for {{ $('Normalize Request').item.json.requestedStart }} - {{ $('Normalize Request').item.json.requestedEnd }}.</p><p>No conflicts were found.</p>",
+        "options": {}
+      },
+      "id": "c66bf80d-fdb7-4e49-83c6-f91dda581a55",
+      "name": "Email: Send Confirmation",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        576,
+        144
+      ],
+      "webhookId": "e7fca069-2fcf-4ea5-b96f-b88c7c865853",
+      "credentials": {
+        "smtp": {
+          "id": "di1LN66wl2cXEQ2g",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'processed', hasConflict: $json.hasConflict !== undefined ? $json.hasConflict : false } }}",
+        "options": {}
+      },
+      "id": "864baa69-5d60-408b-b63e-2af0476e7c7d",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "models/gemini-3-flash-preview"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You are a scheduling assistant. Given a requested meeting, its conflicts, and today's busy slots, suggest exactly 3 alternative time slots on the SAME day (working hours 9:00-18:00) that do not overlap with any busy slot. Respond ONLY with valid JSON in this exact format, nothing else, no markdown code fences:\n{\"suggestions\": [{\"start\": \"ISO8601 datetime\", \"end\": \"ISO8601 datetime\", \"reason\": \"short reason\"}]}\n\nMeeting title: {{ $('Detect Conflict').item.json.title }}\nRequested start: {{ $('Detect Conflict').item.json.requestedStart }}\nRequested end: {{ $('Detect Conflict').item.json.requestedEnd }}\nDuration (minutes): {{ $('Detect Conflict').item.json.durationMinutes }}\nConflicting events: {{ JSON.stringify($('Detect Conflict').item.json.conflictingEvents) }}\nAll busy slots today: {{ JSON.stringify($('Detect Conflict').item.json.busySlots) }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        -48
+      ],
+      "id": "ba1c0d53-6544-45bc-b403-df0d75c156b9",
+      "name": "Message a model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "7arfpPHuPEbFbOYZ",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Meeting Request (Webhook)": {
+      "main": [
+        [
+          {
+            "node": "Normalize Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Request": {
+      "main": [
+        [
+          {
+            "node": "Get Existing Calendar Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Existing Calendar Events": {
+      "main": [
+        [
+          {
+            "node": "Detect Conflict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Conflict": {
+      "main": [
+        [
+          {
+            "node": "Has Conflict?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Conflict?": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Suggestions": {
+      "main": [
+        [
+          {
+            "node": "Email: Send Alternatives",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email: Send Alternatives": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Email: Send Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email: Send Confirmation": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Suggestions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "ec9b3f68-aeca-46c1-b0c3-15b64287ad1d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9d59fc799e22d27e4f0a042dfdd87f50fdba388e5a385f2b1e696a20e4b5db84"
+  },
+  "nodeGroups": [],
+  "id": "6RuQbFIX2L3d4nWi",
+  "tags": []
+}
